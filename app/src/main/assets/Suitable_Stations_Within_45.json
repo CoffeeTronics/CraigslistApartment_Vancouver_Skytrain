@@ -1,0 +1,107 @@
+[
+    {
+        "station": "Production Way\u2013University Station",
+        "travel_time_min": 13,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2534402,
+        "lon": -122.9181348
+    },
+    {
+        "station": "Lougheed Town Centre Station",
+        "travel_time_min": 16,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2484718,
+        "lon": -122.896952
+    },
+    {
+        "station": "Burquitlam Station",
+        "travel_time_min": 20,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2613146,
+        "lon": -122.8898724
+    },
+    {
+        "station": "Lake City Way Station",
+        "travel_time_min": 22,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2546,
+        "lon": -122.93918
+    },
+    {
+        "station": "Holdom Station",
+        "travel_time_min": 23,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2647103,
+        "lon": -122.9821687
+    },
+    {
+        "station": "Brentwood Town Centre Station",
+        "travel_time_min": 25,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2663877,
+        "lon": -123.0016074
+    },
+    {
+        "station": "Moody Centre Station",
+        "travel_time_min": 25,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.27800999999999,
+        "lon": -122.84603
+    },
+    {
+        "station": "Inlet Centre Station",
+        "travel_time_min": 26,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.27721,
+        "lon": -122.82819
+    },
+    {
+        "station": "Sperling\u2013Burnaby Lake Station",
+        "travel_time_min": 28,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2592,
+        "lon": -122.964
+    },
+    {
+        "station": "Coquitlam Central Station",
+        "travel_time_min": 31,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2739,
+        "lon": -122.79996
+    },
+    {
+        "station": "Lafarge Lake\u2013Douglas Station",
+        "travel_time_min": 32,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.28564919999999,
+        "lon": -122.7916212
+    },
+    {
+        "station": "Rupert Station",
+        "travel_time_min": 33,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.2608509,
+        "lon": -123.0328911
+    },
+    {
+        "station": "Commercial\u2013Broadway Station",
+        "travel_time_min": 37,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.262623,
+        "lon": -123.0692365
+    },
+    {
+        "station": "Renfrew Station",
+        "travel_time_min": 38,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.25891,
+        "lon": -123.04538
+    },
+    {
+        "station": "Broadway\u2013City Hall Station",
+        "travel_time_min": 44,
+        "destination": "8555 Baxter Pl #105, Burnaby, BC V5A 4V7, Canada",
+        "lat": 49.26283,
+        "lon": -123.11453
+    }
+]
