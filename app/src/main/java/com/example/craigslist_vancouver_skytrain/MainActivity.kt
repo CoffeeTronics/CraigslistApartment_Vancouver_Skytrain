@@ -25,10 +25,26 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import org.jsoup.Jsoup
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.ParseException
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlin.random.Random
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+
+enum class SortOption(val displayName: String) {
+    Newest("Newest"),
+    Price("Price"),
+    TotalCommute("Commute"),
+    SkytrainTime("Skytrain"),
+    WalkTime("Walk Time")
+}
 
 data class Station(val name: String, val lat: Double, val lon: Double, val travelTimeMin: Int)
 data class DebugEntry(val title: String, val reason: String)
@@ -40,10 +56,17 @@ data class CraigslistResult(
     val stationTravelTime: Int,
     val walkToStationTime: Int,
     val lat: Double,
-    val lon: Double
+    val lon: Double,
+    val totalCommuteTime: Int,
+    val postDateMillis: Long,
+    val stationLat: Double,
+    val stationLon: Double,
+    val priceUsd: String
 )
 
 class MainActivity : ComponentActivity() {
+    private val officeWalkTime = 13 // Constant walk from destination station to Baxter Pl
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -52,6 +75,21 @@ class MainActivity : ComponentActivity() {
             var statusMessage by remember { mutableStateOf("Ready to search") }
             var showResults by remember { mutableStateOf(false) }
             var debugLogs by remember { mutableStateOf(emptyList<DebugEntry>()) }
+            var sortOption by remember { mutableStateOf(SortOption.Newest) }
+
+            val sortedResults by remember(searchResults, sortOption) {
+                derivedStateOf {
+                    when (sortOption) {
+                        SortOption.Newest -> searchResults.sortedByDescending { it.postDateMillis }
+                        SortOption.Price -> searchResults.sortedBy {
+                            it.price.filter { c -> c.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
+                        }
+                        SortOption.TotalCommute -> searchResults.sortedBy { it.totalCommuteTime }
+                        SortOption.SkytrainTime -> searchResults.sortedBy { it.stationTravelTime }
+                        SortOption.WalkTime -> searchResults.sortedBy { it.walkToStationTime }
+                    }
+                }
+            }
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -90,12 +128,30 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                     Text("Results (${searchResults.size})", fontWeight = FontWeight.Bold)
+                                    var sortMenuExpanded by remember { mutableStateOf(false) }
+                                    Box {
+                                        OutlinedButton(onClick = { sortMenuExpanded = true }) { Text(sortOption.displayName) }
+                                        DropdownMenu(
+                                            expanded = sortMenuExpanded,
+                                            onDismissRequest = { sortMenuExpanded = false }
+                                        ) {
+                                            SortOption.values().forEach { option ->
+                                                DropdownMenuItem(
+                                                    text = { Text(option.displayName) },
+                                                    onClick = {
+                                                        sortOption = option
+                                                        sortMenuExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
                                     Button(onClick = { showResults = false }) { Text("Return to Search") }
                                 }
 
                                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                                     item { Text("Verified Commutes", fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp)) }
-                                    items(searchResults) { result -> ResultCard(result) }
+                                    items(sortedResults) { result -> ResultCard(result) }
 
                                     if (debugLogs.isNotEmpty()) {
                                         item { HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp)) }
@@ -115,8 +171,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun ResultCard(result: CraigslistResult) {
-        val officeWalkTime = 13 // Constant walk from destination station to Baxter Pl
-        val totalTime = result.walkToStationTime + result.stationTravelTime + officeWalkTime
+        val totalTime = result.totalCommuteTime
 
         // Detect the SkyTrain line for better commute context
         val trainLine = when {
@@ -154,12 +209,21 @@ class MainActivity : ComponentActivity() {
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    Text(
-                        text = result.price,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = result.price,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        if (result.priceUsd.isNotEmpty()) {
+                            Text(
+                                text = result.priceUsd,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                    }
                 }
 
                 Text(
@@ -181,7 +245,7 @@ class MainActivity : ComponentActivity() {
                 Column(modifier = Modifier.padding(start = 8.dp, top = 4.dp)) {
                     Text("• Walk to ${result.stationName}: ${result.walkToStationTime} mins", style = MaterialTheme.typography.bodySmall)
                     Text("• SkyTrain to office area: ${result.stationTravelTime} mins", style = MaterialTheme.typography.bodySmall)
-                    Text("• Final walk to Baxter Pl: ${officeWalkTime} mins", style = MaterialTheme.typography.bodySmall)
+                    Text("• Final walk to Baxter Pl: $officeWalkTime mins", style = MaterialTheme.typography.bodySmall)
                 }
 
                 // Maps Action Button
@@ -189,7 +253,7 @@ class MainActivity : ComponentActivity() {
                     onClick = {
                         val mapUri = Uri.parse(
                             "http://maps.google.com/maps?saddr=${result.lat},${result.lon}" +
-                                    "&daddr=${Uri.encode(result.stationName)}&directionsmode=walking"
+                                    "&daddr=${result.stationLat},${result.stationLon}&dirflg=w"
                         )
                         startActivity(Intent(Intent.ACTION_VIEW, mapUri).setPackage("com.google.android.apps.maps"))
                     },
@@ -200,6 +264,24 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.width(4.dp))
                     Text("View Walk")
                 }
+            }
+        }
+    }
+
+    private suspend fun getUsdExchangeRate(): Double {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = URL("https://api.exchangerate-api.com/v4/latest/CAD")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                val response = reader.readText()
+                val jsonObject = JSONObject(response)
+                val rates = jsonObject.getJSONObject("rates")
+                rates.getDouble("USD")
+            } catch (e: Exception) {
+                // Fallback rate
+                0.73
             }
         }
     }
@@ -229,6 +311,7 @@ class MainActivity : ComponentActivity() {
     ) {
         lifecycleScope.launch {
             val debugList = mutableListOf<DebugEntry>()
+            val exchangeRate = getUsdExchangeRate()
             val results = withContext(Dispatchers.IO) {
                 val stations = loadStations()
                 try {
@@ -239,9 +322,9 @@ class MainActivity : ComponentActivity() {
                         .get()
 
                     val listings = doc.select(".cl-static-search-result")
-                    val totalToCheck = listings.size.coerceAtMost(50) // Search depth
+                    val totalToCheck = listings.size.coerceAtMost(500) // Search depth
 
-                    listings.take(totalToCheck).mapIndexedNotNull { index, element ->
+                    val allResults = listings.take(totalToCheck).mapIndexedNotNull { index, element ->
                         val title = element.select(".title").text()
                         val priceStr = element.select(".price").text() // Scrape price
 
@@ -250,7 +333,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         // Delay to prevent rate-limiting while searching from Arizona
-                        delay(Random.nextLong(3000, 6000))
+                        delay(Random.nextLong(10, 25))
 
                         val link = element.select("a").attr("abs:href")
                         try {
@@ -259,6 +342,20 @@ class MainActivity : ComponentActivity() {
                                 .header("Referer", url)
                                 .timeout(10000)
                                 .get()
+
+                            val timeElement = detailDoc.select("time.timeago").first()
+                            val datetime = timeElement?.attr("datetime")
+                            val postDateMillis = if (datetime != null) {
+                                try {
+                                    // Handles format like: 2024-05-10T11:04:47-0700
+                                    val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US)
+                                    sdf.parse(datetime)?.time ?: 0L
+                                } catch (e: ParseException) {
+                                    0L // Couldn't parse date
+                                }
+                            } else {
+                                0L
+                            }
 
                             val mapDiv = detailDoc.select("#map").first()
                             val lat = mapDiv?.attr("data-latitude")?.toDoubleOrNull()
@@ -290,11 +387,18 @@ class MainActivity : ComponentActivity() {
                                     null
                                 } else {
                                     // Commute check: Walk + Train + 13m Office Walk
-                                    val total = walkTime + bestStat.travelTimeMin + 13
+                                    val total = walkTime + bestStat.travelTimeMin + officeWalkTime
                                     if (total > 45) {
                                         debugList.add(DebugEntry(title, "Commute too long ($total mins)"))
                                         null
                                     } else {
+                                        val priceCad = priceStr.filter { it.isDigit() }.toIntOrNull()
+                                        val priceUsd = if (priceCad != null) {
+                                            "($${(priceCad * exchangeRate).toInt()} USD)"
+                                        } else {
+                                            ""
+                                        }
+
                                         CraigslistResult(
                                             title = title,
                                             price = if (priceStr.isEmpty()) "N/A" else priceStr,
@@ -303,7 +407,12 @@ class MainActivity : ComponentActivity() {
                                             stationTravelTime = bestStat.travelTimeMin,
                                             walkToStationTime = walkTime,
                                             lat = lat,
-                                            lon = lon
+                                            lon = lon,
+                                            totalCommuteTime = total,
+                                            postDateMillis = postDateMillis,
+                                            stationLat = bestStat.lat,
+                                            stationLon = bestStat.lon,
+                                            priceUsd = priceUsd
                                         )
                                     }
                                 }
@@ -316,6 +425,17 @@ class MainActivity : ComponentActivity() {
                             null
                         }
                     }
+
+                    // Deduplicate results by title, keeping the newest post
+                    val uniqueResults = allResults
+                        .groupBy { it.title.trim().lowercase(Locale.ROOT) }
+                        .mapValues { (_, groupedResults) ->
+                            groupedResults.maxByOrNull { it.postDateMillis }!!
+                        }
+                        .values
+                        .sortedByDescending { it.postDateMillis }
+
+                    uniqueResults
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) { onStatus("Search failed: Check connection") }
                     emptyList<CraigslistResult>()
