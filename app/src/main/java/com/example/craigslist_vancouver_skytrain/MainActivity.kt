@@ -1,6 +1,8 @@
 package com.example.craigslist_vancouver_skytrain
 
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -33,6 +35,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.ParseException
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.random.Random
 import androidx.compose.foundation.verticalScroll
@@ -66,9 +69,12 @@ data class CraigslistResult(
 
 class MainActivity : ComponentActivity() {
     private val officeWalkTime = 13 // Constant walk from destination station to Baxter Pl
+    private lateinit var prefs: SharedPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences("exchange_rate_prefs", Context.MODE_PRIVATE)
+
         setContent {
             var searchResults by remember { mutableStateOf(emptyList<CraigslistResult>()) }
             var isSearching by remember { mutableStateOf(false) }
@@ -269,6 +275,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun getUsdExchangeRate(): Double {
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val storedDate = prefs.getString("date", null)
+
+        if (today == storedDate) {
+            val storedRate = prefs.getFloat("rate", 0.0f).toDouble()
+            if (storedRate > 0.0) {
+                return storedRate
+            }
+        }
+
         return withContext(Dispatchers.IO) {
             try {
                 val url = URL("https://api.exchangerate-api.com/v4/latest/CAD")
@@ -278,10 +294,17 @@ class MainActivity : ComponentActivity() {
                 val response = reader.readText()
                 val jsonObject = JSONObject(response)
                 val rates = jsonObject.getJSONObject("rates")
-                rates.getDouble("USD")
+                val exchangeRate = rates.getDouble("USD")
+
+                prefs.edit()
+                    .putString("date", today)
+                    .putFloat("rate", exchangeRate.toFloat())
+                    .apply()
+
+                exchangeRate
             } catch (e: Exception) {
                 // Fallback rate
-                0.73
+                prefs.getFloat("rate", 0.73f).toDouble() // Try to use last known rate, or default
             }
         }
     }
@@ -333,7 +356,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         // Delay to prevent rate-limiting while searching from Arizona
-                        delay(Random.nextLong(10, 25))
+                        delay(Random.nextLong(10, 30))
 
                         val link = element.select("a").attr("abs:href")
                         try {
