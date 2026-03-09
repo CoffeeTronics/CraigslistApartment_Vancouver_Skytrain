@@ -1,20 +1,17 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
 }
 
 android {
     namespace = "com.example.craigslist_vancouver_skytrain"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.craigslist_vancouver_skytrain"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -36,6 +33,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -56,12 +54,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    //implementation("com.google.maps.android:maps-v3-ktx:3.0.0")
-    //implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    //implementation("org.jsoup:jsoup:1.15.3") // For Craigslist scraping
-    // Use a newer version of Maps KTX that doesn't have the Volley conflict
     implementation("com.google.maps.android:maps-ktx:5.1.1")
     implementation("com.google.android.gms:play-services-maps:19.0.0")
-    // Ensure Jsoup is present for scraping
     implementation("org.jsoup:jsoup:1.15.3")
 }
