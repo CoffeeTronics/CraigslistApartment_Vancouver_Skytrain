@@ -75,14 +75,14 @@ data class CraigslistResult(
     val destStationLat: Double,
     val destStationLon: Double,
     val officeWalkTime: Int,
-    val commuteDestination: String
+    val commuteDestination: String,
+    val transitMode: String = "Skytrain"
 )
 
-data class NearbyStation(val name: String, val walkTimeMin: Int, val line: String, val lat: Double, val lon: Double)
+data class NearbyStation(val name: String, val walkTimeMin: Int, val line: String, val lat: Double, val lon: Double, val type: String = "Skytrain")
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
-    // The key is now pulled from BuildConfig (local.properties)
     private val MAPS_API_KEY = BuildConfig.MAPS_API_KEY 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,6 +99,8 @@ class MainActivity : ComponentActivity() {
             var selectedDestStation by remember { mutableStateOf<NearbyStation?>(null) }
             var reachableRegions by remember { mutableStateOf(setOf("van", "bnc")) }
             var officeWalkTime by remember { mutableStateOf(13) }
+            
+            var selectedModes by remember { mutableStateOf(setOf("skytrain_walk")) }
 
             var searchResults by remember { mutableStateOf(emptyList<CraigslistResult>()) }
             var isSearching by remember { mutableStateOf(false) }
@@ -127,15 +129,16 @@ class MainActivity : ComponentActivity() {
                         "commute_setup" -> CommuteSetupScreen(
                             initialAddress = destinationAddress,
                             closestStations = closestStations,
-                            onNext = { address, time, maxTime ->
+                            onNext = { address, time, maxTime, modes, strategy ->
                                 prefs.edit().putString("saved_address", address).apply()
                                 destinationAddress = address
                                 arrivalTime = time
                                 maxTrainTime = maxTime
+                                selectedModes = modes.toSet()
                                 isSearching = true
-                                statusMessage = "Identifying reachable stations..."
+                                statusMessage = "Identifying reachable hubs..."
                                 lifecycleScope.launch {
-                                    val setupResult = findSuitableStationsAndRegions(address, time, maxTime.toInt())
+                                    val setupResult = findSuitableHubsAndRegions(address, time, maxTime.toInt(), modes, strategy)
                                     suitableStations = setupResult.suitableStations
                                     closestStations = setupResult.closestToDest
                                     reachableRegions = setupResult.regions
@@ -169,7 +172,7 @@ class MainActivity : ComponentActivity() {
                             Column(modifier = Modifier.padding(16.dp).statusBarsPadding()) {
                                 if (!showResults && !isSearching) {
                                     Text(
-                                        text = "Vancouver Skytrain Housing",
+                                        text = "Search Housing",
                                         style = MaterialTheme.typography.headlineLarge,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(bottom = 16.dp)
@@ -193,6 +196,7 @@ class MainActivity : ComponentActivity() {
                                                 officeWalkTime = officeWalkTime,
                                                 commuteDestination = destinationAddress,
                                                 excludeRoomShare = excludeRoomShare,
+                                                transitMode = if (selectedModes.contains("bus")) "Bus" else "Skytrain",
                                                 onStatus = { statusMessage = it },
                                                 onDebug = { debugLogs = it },
                                                 onResult = { results ->
@@ -259,9 +263,9 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun StationChoiceScreen(destinationAddress: String, stations: List<NearbyStation>, onStationSelected: (NearbyStation) -> Unit) {
         Column(modifier = Modifier.fillMaxSize().padding(24.dp).statusBarsPadding(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Multiple Nearby Stations Found", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Multiple Nearby Hubs Found", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
-            Text("Two stations are within 5 minutes of each other. Preview the walk to help you decide:", style = MaterialTheme.typography.bodyMedium)
+            Text("Two transit hubs are within 5 minutes walk. Preview the path to help you decide:", style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(32.dp))
 
             stations.forEach { station ->
@@ -283,7 +287,7 @@ class MainActivity : ComponentActivity() {
             HorizontalDivider()
             Spacer(Modifier.height(24.dp))
             
-            Text("Which station do you want to use for your commute?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Which hub do you want to use for your commute?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
 
             stations.forEach { station ->
@@ -302,16 +306,22 @@ class MainActivity : ComponentActivity() {
     fun CommuteSetupScreen(
         initialAddress: String,
         closestStations: List<NearbyStation>,
-        onNext: (String, String, String) -> Unit
+        onNext: (String, String, String, List<String>, String) -> Unit
     ) {
         var address by remember { mutableStateOf(initialAddress) }
         var arrivalTimeStr by remember { mutableStateOf("09:00") }
         var maxTrainTime by remember { mutableStateOf("45") }
+        
+        var modeBusSkytrain by remember { mutableStateOf(false) }
+        var modeBus by remember { mutableStateOf(false) }
+        var modeSkytrain by remember { mutableStateOf(true) }
+        var transitStrategy by remember { mutableStateOf("shortest_time") }
+        var strategyExpanded by remember { mutableStateOf(false) }
+
         val context = LocalContext.current
 
         Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp).statusBarsPadding(),
-            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize().padding(16.dp).statusBarsPadding().verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text("Commute Setup", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
@@ -341,29 +351,66 @@ class MainActivity : ComponentActivity() {
             OutlinedTextField(
                 value = maxTrainTime,
                 onValueChange = { maxTrainTime = it },
-                label = { Text("Max Train Travel Time (mins)") },
+                label = { Text("Max Transit Time (mins)") },
                 modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
+            Spacer(Modifier.height(24.dp))
+
+            Text("Commute Modes:", style = MaterialTheme.typography.titleSmall, modifier = Modifier.align(Alignment.Start))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { modeBusSkytrain = !modeBusSkytrain }) {
+                Checkbox(checked = modeBusSkytrain, onCheckedChange = { modeBusSkytrain = it })
+                Text("Bus and Skytrain")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { modeBus = !modeBus }) {
+                Checkbox(checked = modeBus, onCheckedChange = { modeBus = it })
+                Text("Bus")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { modeSkytrain = !modeSkytrain }) {
+                Checkbox(checked = modeSkytrain, onCheckedChange = { modeSkytrain = it })
+                Text("Skytrain")
+            }
+
+            if (modeBusSkytrain || modeBus) {
+                Spacer(Modifier.height(16.dp))
+                Text("Transit Strategy:", style = MaterialTheme.typography.titleSmall, modifier = Modifier.align(Alignment.Start))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { strategyExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (transitStrategy == "shortest_time") "Shortest time" else "Fewest transfers")
+                    }
+                    DropdownMenu(expanded = strategyExpanded, onDismissRequest = { strategyExpanded = false }) {
+                        DropdownMenuItem(text = { Text("Shortest time") }, onClick = { transitStrategy = "shortest_time"; strategyExpanded = false })
+                        DropdownMenuItem(text = { Text("Fewest transfers") }, onClick = { transitStrategy = "fewest_transfers"; strategyExpanded = false })
+                    }
+                }
+            }
+
             Spacer(Modifier.height(32.dp))
 
             Button(
-                onClick = { onNext(address, arrivalTimeStr, maxTrainTime) },
+                onClick = { 
+                    val modes = mutableListOf<String>()
+                    if (modeBusSkytrain) modes.add("bus_skytrain")
+                    if (modeBus) modes.add("bus")
+                    if (modeSkytrain) modes.add("skytrain_walk")
+                    onNext(address, arrivalTimeStr, maxTrainTime, modes, transitStrategy) 
+                },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Find Suitable Stations")
+                Text("Find Suitable Transit Hubs")
             }
 
             if (closestStations.isNotEmpty()) {
                 Spacer(Modifier.height(24.dp))
-                Text("Closest Stations to Destination:", fontWeight = FontWeight.Bold)
-                closestStations.forEachIndexed { index, station ->
+                Text("Closest Transit Hubs to Destination:", fontWeight = FontWeight.Bold)
+                closestStations.forEachIndexed { index, hub ->
                     val isClosest = index == 0
                     val significant = closestStations.size >= 2 && (closestStations[1].walkTimeMin - closestStations[0].walkTimeMin) > 5
                     val shouldHighlight = isClosest && (closestStations.size == 1 || significant)
                     
+                    val typeLabel = if (hub.type == "Bus Stop") " (Bus Stop)" else " (${hub.line})"
                     Text(
-                        text = "• ${station.name} (${station.line}): ${station.walkTimeMin} min walk" + if (shouldHighlight) " [RECOMMENDED]" else "",
+                        text = "• ${hub.name}$typeLabel: ${hub.walkTimeMin} min walk" + if (shouldHighlight) " [RECOMMENDED]" else "",
                         color = if (shouldHighlight) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
                         fontWeight = if (shouldHighlight) FontWeight.Bold else FontWeight.Normal
                     )
@@ -418,61 +465,81 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun getRegionForStation(stationName: String): String {
-        val name = stationName.lowercase()
-        return when {
-            name.contains("waterfront") || name.contains("burrard") || name.contains("granville") ||
-            name.contains("stadium") || name.contains("main street") || name.contains("broadway") ||
-            name.contains("nanaimo") || name.contains("29th ave") || name.contains("joyce") ||
-            name.contains("vcc") || name.contains("renfrew") || name.contains("rupert") ||
-            name.contains("marine drive") || name.contains("langara") || name.contains("oakridge") ||
-            name.contains("king edward") || name.contains("olympic") -> "van"
+    private suspend fun getLatLngFromAddress(address: String): Pair<Double, Double>? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val encodedAddress = URLEncoder.encode(address, "UTF-8")
+                val url = "https://maps.googleapis.com/maps/api/geocode/json?address=$encodedAddress&key=$MAPS_API_KEY"
+                val conn = URL(url).openConnection() as HttpURLConnection
+                val resp = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+                val json = JSONObject(resp)
+                if (json.getString("status") == "OK") {
+                    val location = json.getJSONArray("results").getJSONObject(0)
+                        .getJSONObject("geometry").getJSONObject("location")
+                    Pair(location.getDouble("lat"), location.getDouble("lng"))
+                } else null
+            } catch (e: Exception) { null }
+        }
+    }
 
-            name.contains("patterson") || name.contains("metrotown") || name.contains("royal oak") ||
-            name.contains("edmonds") || name.contains("22nd street") || name.contains("new west") ||
-            name.contains("columbia") || name.contains("sapperton") || name.contains("braid") ||
-            name.contains("lougheed") || name.contains("production way") || name.contains("lake city") ||
-            name.contains("sperling") || name.contains("holdom") || name.contains("brentwood") ||
-            name.contains("gilmore") -> "bnc"
-
-            name.contains("bridgeport") || name.contains("aberdeen") || name.contains("lansdowne") ||
-            name.contains("brighouse") || name.contains("templeton") || name.contains("sea island") ||
-            name.contains("yvr") || name.contains("scott road") || name.contains("gateway") ||
-            name.contains("surrey") || name.contains("king george") -> "rds"
-
-            name.contains("burquitlam") || name.contains("moody") || name.contains("inlet") ||
-            name.contains("coquitlam") || name.contains("lincoln") || name.contains("lafarge") -> "pml"
-
-            else -> "van"
+    private suspend fun getNearbyBusStops(lat: Double, lon: Double, destinationAddr: String): List<NearbyStation> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=$lat,$lon&rankby=distance&type=transit_station&key=$MAPS_API_KEY"
+                val conn = URL(url).openConnection() as HttpURLConnection
+                val resp = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+                val json = JSONObject(resp)
+                val results = mutableListOf<NearbyStation>()
+                if (json.getString("status") == "OK") {
+                    val places = json.getJSONArray("results")
+                    for (i in 0 until places.length().coerceAtMost(5)) {
+                        val place = places.getJSONObject(i)
+                        val name = place.getString("name")
+                        val pLat = place.getJSONObject("geometry").getJSONObject("location").getDouble("lat")
+                        val pLon = place.getJSONObject("geometry").getJSONObject("location").getDouble("lng")
+                        
+                        val walkUrl = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$pLat,$pLon&destinations=${URLEncoder.encode(destinationAddr, "UTF-8")}&mode=walking&key=$MAPS_API_KEY"
+                        val walkConn = URL(walkUrl).openConnection() as HttpURLConnection
+                        val walkResp = BufferedReader(InputStreamReader(walkConn.inputStream)).readText()
+                        val walkJson = JSONObject(walkResp)
+                        val walkTime = walkJson.getJSONArray("rows").getJSONObject(0).getJSONArray("elements").getJSONObject(0).getJSONObject("duration").getInt("value") / 60
+                        
+                        results.add(NearbyStation(name, walkTime, "Bus", pLat, pLon, "Bus Stop"))
+                    }
+                }
+                results
+            } catch (e: Exception) { emptyList() }
         }
     }
 
     data class SetupResult(val suitableStations: List<Station>, val closestToDest: List<NearbyStation>, val regions: Set<String>)
 
-    private suspend fun findSuitableStationsAndRegions(destination: String, arrivalTimeStr: String, maxTime: Int): SetupResult {
+    private suspend fun findSuitableHubsAndRegions(destination: String, arrivalTimeStr: String, maxTime: Int, modes: List<String>, strategy: String): SetupResult {
         return withContext(Dispatchers.IO) {
             val allStations = loadAllStationsFromAssets()
             if (MAPS_API_KEY == "YOUR_API_KEY_HERE" || MAPS_API_KEY.isEmpty()) {
                 return@withContext SetupResult(allStations.filter { it.travelTimeMin <= maxTime }, emptyList(), setOf("van", "bnc"))
             }
 
+            val destCoords = getLatLngFromAddress(destination) ?: return@withContext SetupResult(emptyList(), emptyList(), emptySet())
+
             try {
                 val encodedDest = URLEncoder.encode(destination, "UTF-8")
                 val stationWalkTimes = mutableListOf<NearbyStation>()
 
-                val walkBatches = allStations.chunked(25)
-                for (batch in walkBatches) {
-                    val origins = batch.joinToString("|") { "${it.lat},${it.lon}" }
-                    val walkUrl = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$origins&destinations=$encodedDest&mode=walking&key=$MAPS_API_KEY"
-                    val conn = URL(walkUrl).openConnection() as HttpURLConnection
-                    val resp = BufferedReader(InputStreamReader(conn.inputStream)).readText()
-                    val json = JSONObject(resp)
-                    if (json.getString("status") == "OK") {
-                        val rows = json.getJSONArray("rows")
-                        for (i in 0 until rows.length()) {
-                            val elementArray = rows.getJSONObject(i).getJSONArray("elements")
-                            if (elementArray.length() > 0) {
-                                val element = elementArray.getJSONObject(0)
+                // Phase 1: Transit Hub Discovery
+                if (modes.contains("skytrain_walk") || modes.contains("bus_skytrain")) {
+                    val walkBatches = allStations.chunked(25)
+                    for (batch in walkBatches) {
+                        val origins = batch.joinToString("|") { "${it.lat},${it.lon}" }
+                        val walkUrl = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$origins&destinations=$encodedDest&mode=walking&key=$MAPS_API_KEY"
+                        val conn = URL(walkUrl).openConnection() as HttpURLConnection
+                        val resp = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+                        val json = JSONObject(resp)
+                        if (json.getString("status") == "OK") {
+                            val rows = json.getJSONArray("rows")
+                            for (i in 0 until rows.length()) {
+                                val element = rows.getJSONObject(i).getJSONArray("elements").getJSONObject(0)
                                 if (element.getString("status") == "OK") {
                                     val dur = element.getJSONObject("duration").getInt("value") / 60
                                     stationWalkTimes.add(NearbyStation(batch[i].name, dur, getStationLine(batch[i].name), batch[i].lat, batch[i].lon))
@@ -482,52 +549,24 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (stationWalkTimes.isEmpty()) return@withContext SetupResult(emptyList(), emptyList(), emptySet())
-                val sortedNearby = stationWalkTimes.sortedBy { it.walkTimeMin }.take(2)
-                val destStation = allStations.first { it.name == sortedNearby[0].name }
-                val destLatLng = "${destStation.lat},${destStation.lon}"
-                val minWalkToDest = sortedNearby[0].walkTimeMin
-
-                val sdf = SimpleDateFormat("HH:mm", Locale.US)
-                val calendar = Calendar.getInstance()
-                val now = calendar.time
-                calendar.time = sdf.parse(arrivalTimeStr)!!
-                val arrivalHour = calendar.get(Calendar.HOUR_OF_DAY)
-                val arrivalMin = calendar.get(Calendar.MINUTE)
-                calendar.time = now
-                calendar.set(Calendar.HOUR_OF_DAY, arrivalHour)
-                calendar.set(Calendar.MINUTE, arrivalMin)
-                calendar.set(Calendar.SECOND, 0)
-                if (calendar.before(Calendar.getInstance())) calendar.add(Calendar.DAY_OF_YEAR, 1)
-                val arrivalTimestamp = calendar.timeInMillis / 1000
-
-                val suitable = mutableListOf<Station>()
-                val reachableRegions = mutableSetOf<String>()
-                val transitBatches = allStations.chunked(25)
-
-                for (batch in transitBatches) {
-                    val origins = batch.joinToString("|") { "${it.lat},${it.lon}" }
-                    val apiUrl = "https://maps.googleapis.com/maps/api/distancematrix/json?origins=$origins&destinations=$destLatLng&mode=transit&transit_mode=subway&arrival_time=$arrivalTimestamp&key=$MAPS_API_KEY"
-                    val connection = URL(apiUrl).openConnection() as HttpURLConnection
-                    val response = BufferedReader(InputStreamReader(connection.inputStream)).readText()
-                    val jsonResponse = JSONObject(response)
-
-                    if (jsonResponse.getString("status") == "OK") {
-                        val rows = jsonResponse.getJSONArray("rows")
-                        for (i in 0 until rows.length()) {
-                            val elementArray = rows.getJSONObject(i).getJSONArray("elements")
-                            if (elementArray.length() > 0) {
-                                val element = elementArray.getJSONObject(0)
-                                if (element.getString("status") == "OK") {
-                                    val durationMin = element.getJSONObject("duration").getInt("value") / 60
-                                    if (durationMin <= maxTime) suitable.add(batch[i].copy(travelTimeMin = durationMin))
-                                    if (durationMin + minWalkToDest <= 70) reachableRegions.add(getRegionForStation(batch[i].name))
-                                }
-                            }
-                        }
-                    }
+                if (modes.contains("bus") || modes.contains("bus_skytrain")) {
+                    val busStops = getNearbyBusStops(destCoords.first, destCoords.second, destination)
+                    stationWalkTimes.addAll(busStops)
                 }
-                SetupResult(suitable, sortedNearby, reachableRegions)
+
+                if (stationWalkTimes.isEmpty()) return@withContext SetupResult(emptyList(), emptyList(), emptySet())
+                
+                val finalNearby = mutableListOf<NearbyStation>()
+                if (modes.contains("bus") && !modes.contains("skytrain_walk") && !modes.contains("bus_skytrain")) {
+                    finalNearby.addAll(stationWalkTimes.filter { it.type == "Bus Stop" }.sortedBy { it.walkTimeMin }.take(2))
+                } else if (modes.contains("bus_skytrain")) {
+                    finalNearby.addAll(stationWalkTimes.filter { it.type == "Skytrain" }.sortedBy { it.walkTimeMin }.take(2))
+                    finalNearby.addAll(stationWalkTimes.filter { it.type == "Bus Stop" }.sortedBy { it.walkTimeMin }.take(2))
+                } else {
+                    finalNearby.addAll(stationWalkTimes.sortedBy { it.walkTimeMin }.take(2))
+                }
+                
+                SetupResult(allStations.filter { it.travelTimeMin <= maxTime }, finalNearby.sortedBy { it.walkTimeMin }, setOf("van", "bnc", "rds", "pml"))
             } catch (e: Exception) {
                 SetupResult(allStations.filter { it.travelTimeMin <= maxTime }, emptyList(), setOf("van", "bnc"))
             }
@@ -611,7 +650,8 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.weight(1f).clickable { 
                             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.url))
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
                             intent.putExtra(android.provider.Browser.EXTRA_APPLICATION_ID, context.packageName)
                             context.startActivity(intent)
                         }
@@ -627,30 +667,37 @@ class MainActivity : ComponentActivity() {
                 Text(text = "Total Commute: ${totalTime} mins", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = if (totalTime <= 35) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface)
                 Column(modifier = Modifier.padding(start = 8.dp, top = 4.dp)) {
                     Text("• Walk to ${result.stationName}: ${result.walkToStationTime} mins", style = MaterialTheme.typography.bodySmall)
-                    Text("• SkyTrain to ${result.destStationName}: ${result.stationTravelTime} mins", style = MaterialTheme.typography.bodySmall)
+                    Text("• Transit ride: ${result.stationTravelTime} mins", style = MaterialTheme.typography.bodySmall)
                     Text("• Final walk to destination: ${result.officeWalkTime} mins", style = MaterialTheme.typography.bodySmall)
                 }
                 Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                    val button1Text = if (result.transitMode == "Bus") "Walk 1" else "Walk to Station"
+                    val transitBtnText = if (result.transitMode == "Bus") "Transit" else "Train"
+                    val button2Text = if (result.transitMode == "Bus") "Walk 2" else "Walk to Office"
+
                     Button(onClick = { 
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://maps.google.com/maps?saddr=${result.lat},${result.lon}&daddr=${result.stationLat},${result.stationLon}&dirflg=w"))
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
                         context.startActivity(intent)
-                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("Walk 1", fontSize = 11.sp) }
+                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text(button1Text, fontSize = 11.sp) }
                     Spacer(Modifier.width(4.dp))
                     Button(onClick = { 
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://maps.google.com/maps?saddr=${result.stationLat},${result.stationLon}&daddr=${result.destStationLat},${result.destStationLon}&dirflg=r"))
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
                         context.startActivity(intent)
-                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("Train", fontSize = 11.sp) }
+                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text(transitBtnText, fontSize = 11.sp) }
                     Spacer(Modifier.width(4.dp))
                     Button(onClick = { 
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://maps.google.com/maps?saddr=${result.destStationLat},${result.destStationLon}&daddr=${Uri.encode(result.commuteDestination)}&dirflg=w"))
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
                         context.startActivity(intent)
-                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("Walk 2", fontSize = 11.sp) }
+                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text(button2Text, fontSize = 11.sp) }
                 }
             }
         }
@@ -682,7 +729,7 @@ class MainActivity : ComponentActivity() {
         return mapOf("User-Agent" to userAgents.random(), "Accept-Language" to "en-US,en;q=0.9", "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", "Connection" to "keep-alive")
     }
 
-    private fun runSearch(url: String, maxDistance: Int, stations: List<Station>, destStation: Station?, officeWalkTime: Int, commuteDestination: String, excludeRoomShare: Boolean, onStatus: (String) -> Unit, onDebug: (List<DebugEntry>) -> Unit, onResult: (List<CraigslistResult>) -> Unit) {
+    private fun runSearch(url: String, maxDistance: Int, stations: List<Station>, destStation: Station?, officeWalkTime: Int, commuteDestination: String, excludeRoomShare: Boolean, transitMode: String, onStatus: (String) -> Unit, onDebug: (List<DebugEntry>) -> Unit, onResult: (List<CraigslistResult>) -> Unit) {
         lifecycleScope.launch {
             val debugList = mutableListOf<DebugEntry>()
             val exchangeRate = getUsdExchangeRate()
@@ -727,7 +774,7 @@ class MainActivity : ComponentActivity() {
                                     if (total > 85) { debugList.add(DebugEntry(title, "Commute > 85m")); null } else {
                                         val priceCad = priceStr.filter { it.isDigit() }.toIntOrNull()
                                         val priceUsd = if (priceCad != null) "($${(priceCad * exchangeRate).toInt()} USD)" else ""
-                                        CraigslistResult(title = title, price = if (priceStr.isEmpty()) "N/A" else priceStr, url = finalCanonicalUrl, stationName = bestStat.name, stationTravelTime = bestStat.travelTimeMin, walkToStationTime = walkTime, lat = lat, lon = lon, totalCommuteTime = total, postDateMillis = postDateMillis, stationLat = bestStat.lat, stationLon = bestStat.lon, priceUsd = priceUsd, destStationName = destStation.name, destStationLat = destStation.lat, destStationLon = destStation.lon, officeWalkTime = officeWalkTime, commuteDestination = commuteDestination)
+                                        CraigslistResult(title = title, price = if (priceStr.isEmpty()) "N/A" else priceStr, url = finalCanonicalUrl, stationName = bestStat.name, stationTravelTime = bestStat.travelTimeMin, walkToStationTime = walkTime, lat = lat, lon = lon, totalCommuteTime = total, postDateMillis = postDateMillis, stationLat = bestStat.lat, stationLon = bestStat.lon, priceUsd = priceUsd, destStationName = destStation.name, destStationLat = destStation.lat, destStationLon = destStation.lon, officeWalkTime = officeWalkTime, commuteDestination = commuteDestination, transitMode = transitMode)
                                     }
                                 }
                             } else { debugList.add(DebugEntry(title, "No station")); null }
